@@ -33,10 +33,27 @@ const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
       console.log('Starting Auth0 login with redirectUrl:', redirectUri);
       console.log('Auth0 Config:', auth0Config);
       
-      const credentials = await auth0.webAuth.authorize({
+      // 构建认证参数 - 支持SSO
+      const authParams = {
         scope: 'openid profile email',
         redirectUrl: redirectUri,
-      });
+        // 移除 prompt: 'login' 以支持SSO
+        // 如果Auth0 session存在，会静默登录；如果不存在，会显示登录页面
+      };
+
+      console.log('Auth params:', authParams);
+      console.log('Expected callback URL:', redirectUri);
+      
+      // 为了支持SSO，我们需要适当的配置
+      // 不使用ephemeralSession，但需要提供一些基本配置
+      const authOptions = Platform.OS === 'ios' ? {
+        // iOS配置：不使用ephemeralSession以支持SSO
+        safariViewControllerPresentationStyle: 0 // 使用默认样式
+      } : {};
+      
+      console.log('Auth options:', authOptions);
+      
+      const credentials = await auth0.webAuth.authorize(authParams, authOptions);
 
       if (credentials) {
         console.log('Login successful:', credentials);

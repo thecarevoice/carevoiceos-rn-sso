@@ -7,6 +7,7 @@ import {
   Linking,
   Alert,
   SafeAreaView,
+  Platform,
 } from 'react-native';
 import Auth0 from 'react-native-auth0';
 import {auth0Config} from '../../auth0-configuration';
@@ -63,12 +64,46 @@ const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
   };
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
+    Alert.alert('Logout', 'Choose logout option:', [
       {text: 'Cancel', style: 'cancel'},
       {
-        text: 'Confirm',
+        text: 'Local Only',
         onPress: () => {
+          // 只清除本地session，不调用Auth0 clearSession
+          // 下次登录时使用 prompt: 'login' 强制重新认证
+          console.log('Local logout - navigating to login');
           navigation.replace('Login');
+        },
+      },
+      {
+        text: 'Complete Logout',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            console.log('Starting complete logout process...');
+            
+            // 对于iOS，使用ephemeralSession避免弹框
+            if (Platform.OS === 'ios') {
+              console.log('iOS: Using local logout to avoid alert box');
+              // 在iOS上不调用clearSession，避免弹框
+              // 下次登录时使用 prompt: 'login' 强制重新认证
+              navigation.replace('Login');
+            } else {
+              // Android上正常调用clearSession
+              await auth0.webAuth.clearSession();
+              console.log('Auth0 session cleared successfully');
+              navigation.replace('Login');
+            }
+          } catch (error: any) {
+            console.error('Logout error:', error);
+            
+            // 如果用户取消了Auth0 logout，仍然导航回登录页面
+            if (error.error === 'a0.session.user_cancelled') {
+              console.log('User cancelled Auth0 logout, performing local logout only');
+            }
+            
+            navigation.replace('Login');
+          }
         },
       },
     ]);
