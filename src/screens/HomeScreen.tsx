@@ -4,15 +4,15 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Linking,
   Alert,
   SafeAreaView,
-  Platform,
+  Modal,
+  TextInput,
+  ActivityIndicator,
+  Linking,
 } from 'react-native';
-import Auth0 from 'react-native-auth0';
-import {auth0Config} from '../../auth0-configuration';
-
-const auth0 = new Auth0(auth0Config);
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {getDeeplink} from '../services/api';
 
 interface HomeScreenProps {
   route: any;
@@ -20,88 +20,89 @@ interface HomeScreenProps {
 }
 
 const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
-  const {credentials} = route.params || {};
-  const [userInfo, setUserInfo] = useState<any>(null);
+  const {user} = route.params || {};
+  const [userInfo, setUserInfo] = useState<any>(user);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [deeplink, setDeeplink] = useState('');
+  const [authCode, setAuthCode] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (credentials?.accessToken) {
-      getUserInfo(credentials.accessToken);
+    // 如果route.params中没有用户信息,从AsyncStorage加载
+    if (!userInfo) {
+      loadUserInfo();
     }
-  }, [credentials]);
+  }, []);
 
-  const getUserInfo = async (accessToken: string) => {
+  const loadUserInfo = async () => {
     try {
-      const user = await auth0.auth.userInfo({token: accessToken});
-      setUserInfo(user);
+      const userId = await AsyncStorage.getItem('userId');
+      const email = await AsyncStorage.getItem('userEmail');
+      const name = await AsyncStorage.getItem('userName');
+      
+      if (userId && email) {
+        setUserInfo({id: userId, email, name});
+      }
     } catch (error) {
-      console.error('Get user info error:', error);
+      console.error('Load user info error:', error);
     }
   };
 
-  const handleSSOToAppB = async () => {
-    if (!credentials?.accessToken) {
-      Alert.alert('Error', 'Access token not found');
+  const handleGetStarted = async () => {
+    if (!userInfo?.id) {
+      Alert.alert('Error', 'User information not found');
       return;
     }
 
     try {
-      // 使用 Deep Link 跳转到 APP B，并传递 access token
-      const deepLink = `carevoiceosdemo://sso?token=${encodeURIComponent(
-        credentials.accessToken,
-      )}&idToken=${encodeURIComponent(credentials.idToken || '')}`;
+      setLoading(true);
+      console.log('Getting deeplink for user:', userInfo.id);
 
-      console.log('Attempting to open:', deepLink);
-      const canOpen = await Linking.canOpenURL(deepLink);
-      if (canOpen) {
-        await Linking.openURL(deepLink);
-      } else {
-        Alert.alert('Error', 'Cannot open APP B, please make sure it is installed');
+      const response = await getDeeplink(userInfo.id);
+
+      if (response.success) {
+        console.log('Deeplink generated:', response.data.deeplink);
+        console.log('Authorization code:', response.data.authorizationCode);
+        setDeeplink(response.data.deeplink);
+        setAuthCode(response.data.authorizationCode);
+        setModalVisible(true);
       }
     } catch (error: any) {
-      console.error('SSO error:', error);
-      Alert.alert('Error', error.message || 'Navigation failed');
+      console.error('Get deeplink error:', error);
+      
+      let errorMessage = 'Failed to generate deeplink';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert('Error', errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Choose logout option:', [
+    Alert.alert('Logout', 'Are you sure you want to logout?', [
       {text: 'Cancel', style: 'cancel'},
       {
-        text: 'Local Only',
-        onPress: () => {
-          // 只清除本地session，不调用Auth0 clearSession
-          // 下次登录时使用 prompt: 'login' 强制重新认证
-          console.log('Local logout - navigating to login');
-          navigation.replace('Login');
-        },
-      },
-      {
-        text: 'Complete Logout',
+        text: 'Logout',
         style: 'destructive',
         onPress: async () => {
           try {
-            console.log('Starting complete logout process...');
+            // 清除所有存储的token和用户信息
+            await AsyncStorage.multiRemove([
+              'authToken',
+              'userId',
+              'userEmail',
+              'userName',
+            ]);
             
-            // 对于iOS，使用ephemeralSession避免弹框
-            if (Platform.OS === 'ios') {
-              console.log('iOS: Using local logout to avoid alert box');
-              // 在iOS上不调用clearSession，避免弹框
-              // 下次登录时使用 prompt: 'login' 强制重新认证
-              navigation.replace('Login');
-            } else {
-              // Android上正常调用clearSession
-              await auth0.webAuth.clearSession();
-              console.log('Auth0 session cleared successfully');
-              navigation.replace('Login');
-            }
-          } catch (error: any) {
+            console.log('Logout successful, navigating to login');
+            navigation.replace('Login');
+          } catch (error) {
             console.error('Logout error:', error);
-            
-            // 如果用户取消了Auth0 logout，仍然导航回登录页面
-            if (error.error === 'a0.session.user_cancelled') {
-              console.log('User cancelled Auth0 logout, performing local logout only');
-            }
-            
             navigation.replace('Login');
           }
         },
@@ -112,10 +113,10 @@ const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Client SSO</Text>
+        <Text style={styles.headerTitle}>Client SSO App (APP A)</Text>
         <Text style={styles.headerSubtitle}>Health</Text>
       </View>
-      
+
       <View style={styles.content}>
         <View style={styles.card}>
           <View style={styles.cardHeader}>
@@ -124,17 +125,25 @@ const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
             </View>
             <Text style={styles.cardTitle}>Discover Health Wellness</Text>
           </View>
-          
+
           <Text style={styles.cardDescription}>
-            Your personalized health & wellness journey starts here. Unlock exclusive features!
+            Your personalized health & wellness journey starts here. Unlock
+            exclusive features!
           </Text>
-          
+
           <TouchableOpacity
             style={styles.getStartedButton}
-            onPress={handleSSOToAppB}>
+            onPress={handleGetStarted}
+            disabled={loading}>
             <View style={styles.buttonContent}>
-              <Text style={styles.buttonIcon}>⚡</Text>
-              <Text style={styles.buttonText}>Get Started</Text>
+              {loading ? (
+                <ActivityIndicator color="#2E7BF6" size="small" />
+              ) : (
+                <>
+                  <Text style={styles.buttonIcon}>⚡</Text>
+                  <Text style={styles.buttonText}>Get Started</Text>
+                </>
+              )}
             </View>
           </TouchableOpacity>
         </View>
@@ -142,7 +151,9 @@ const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
         {userInfo && (
           <View style={styles.userInfoCard}>
             <Text style={styles.userInfoTitle}>Login Information</Text>
-            <Text style={styles.userInfoText}>User: {userInfo.name || userInfo.email}</Text>
+            <Text style={styles.userInfoText}>
+              User: {userInfo.name || userInfo.email}
+            </Text>
             <Text style={styles.userInfoEmail}>{userInfo.email}</Text>
           </View>
         )}
@@ -153,6 +164,85 @@ const HomeScreen: React.FC<HomeScreenProps> = ({route, navigation}) => {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Deeplink Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>SSO Deeplink Generated</Text>
+            <Text style={styles.modalSubtitle}>
+              Authorization code for APP B (CareVoice)
+            </Text>
+
+            <View style={styles.infoSection}>
+              <Text style={styles.infoLabel}>Authorization Code:</Text>
+              <TextInput
+                style={styles.codeInput}
+                value={authCode}
+                editable={false}
+                selectTextOnFocus
+              />
+            </View>
+
+            <View style={styles.infoSection}>
+              <Text style={styles.infoLabel}>Deeplink URL:</Text>
+              <TextInput
+                style={styles.deeplinkInput}
+                value={deeplink}
+                multiline
+                numberOfLines={4}
+                editable={false}
+                selectTextOnFocus
+              />
+            </View>
+
+            <View style={styles.noteSection}>
+              <Text style={styles.noteTitle}>📝 How it works:</Text>
+              <Text style={styles.noteText}>
+                1. APP A generates authorization code{'\n'}
+                2. APP B receives code via deeplink{'\n'}
+                3. APP B backend exchanges code for tokens{'\n'}
+                4. Tokens used to access CareVoice services
+              </Text>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={async () => {
+                  try {
+                    console.log('Opening deeplink:', deeplink);
+                    
+                    // 检查是否可以打开deeplink
+                    const canOpen = await Linking.canOpenURL(deeplink);
+                    
+                    if (canOpen) {
+                      await Linking.openURL(deeplink);
+                      setModalVisible(false);
+                    } else {
+                      Alert.alert(
+                        'Cannot Open APP B',
+                        'APP B (CareVoice Demo) is not installed or deeplink scheme is not supported.\n\nDeeplink: ' + deeplink,
+                        [
+                          {text: 'OK'},
+                        ]
+                      );
+                    }
+                  } catch (error: any) {
+                    console.error('Open deeplink error:', error);
+                    Alert.alert('Error', error.message || 'Failed to open APP B');
+                  }
+                }}>
+                <Text style={styles.modalButtonText}>Click to Open APP B</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -239,6 +329,7 @@ const styles = StyleSheet.create({
   buttonContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 20,
   },
   buttonIcon: {
     fontSize: 16,
@@ -294,6 +385,104 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 500,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2E7BF6',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  infoSection: {
+    marginBottom: 16,
+  },
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 6,
+  },
+  codeInput: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 13,
+    color: '#333',
+    fontFamily: 'monospace',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  deeplinkInput: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 11,
+    color: '#333',
+    fontFamily: 'monospace',
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  noteSection: {
+    backgroundColor: '#E8F4FD',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 20,
+  },
+  noteTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2E7BF6',
+    marginBottom: 8,
+  },
+  noteText: {
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 18,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  modalButton: {
+    backgroundColor: '#2E7BF6',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+  },
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
 
 export default HomeScreen;
+

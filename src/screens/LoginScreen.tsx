@@ -6,12 +6,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  TextInput,
+  KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from 'react-native';
-import Auth0 from 'react-native-auth0';
-import {auth0Config} from '../../auth0-configuration';
-
-const auth0 = new Auth0(auth0Config);
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {login, register} from '../services/api';
 
 interface LoginScreenProps {
   navigation: any;
@@ -19,91 +20,167 @@ interface LoginScreenProps {
 
 const LoginScreen: React.FC<LoginScreenProps> = ({navigation}) => {
   const [loading, setLoading] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
   const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Error', 'Please enter email and password');
+      return;
+    }
+
     try {
       setLoading(true);
-      
-      // 明确指定 redirectUrl，根据平台选择
-      const bundleId = 'org.reactjs.native.example.carevoiceosrnsso';
-      const platform = Platform.OS === 'ios' ? 'ios' : 'android';
-      const redirectUri = `${bundleId}://${auth0Config.domain}/${platform}/${bundleId}/callback`;
-      
-      console.log('Platform:', Platform.OS);
-      console.log('Starting Auth0 login with redirectUrl:', redirectUri);
-      console.log('Auth0 Config:', auth0Config);
-      
-      // 构建认证参数 - 支持SSO
-      const authParams = {
-        scope: 'openid profile email',
-        redirectUrl: redirectUri,
-        // 移除 prompt: 'login' 以支持SSO
-        // 如果Auth0 session存在，会静默登录；如果不存在，会显示登录页面
-      };
+      console.log('Logging in with:', {email});
 
-      console.log('Auth params:', authParams);
-      console.log('Expected callback URL:', redirectUri);
-      
-      // 为了支持SSO，我们需要适当的配置
-      // 不使用ephemeralSession，但需要提供一些基本配置
-      const authOptions = Platform.OS === 'ios' ? {
-        // iOS配置：不使用ephemeralSession以支持SSO
-        safariViewControllerPresentationStyle: 0 // 使用默认样式
-      } : {};
-      
-      console.log('Auth options:', authOptions);
-      
-      const credentials = await auth0.webAuth.authorize(authParams, authOptions);
+      const response = await login({email, password});
 
-      if (credentials) {
-        console.log('Login successful:', credentials);
-        // 登录成功，跳转到主页
-        navigation.replace('Home', {credentials});
+      if (response.success) {
+        console.log('Login successful:', response.data);
+        
+        // 保存token和用户信息
+        await AsyncStorage.setItem('authToken', response.data.token);
+        await AsyncStorage.setItem('userId', response.data.user.id);
+        await AsyncStorage.setItem('userEmail', response.data.user.email);
+        await AsyncStorage.setItem('userName', response.data.user.name);
+
+        // 跳转到主页
+        navigation.replace('Home', {
+          user: response.data.user,
+        });
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
       
-      if (error.error !== 'a0.session.user_cancelled') {
-        let errorMessage = 'Login failed, please try again';
-        
-        // Check for network errors
-        if (error.message && error.message.includes('network connection')) {
-          errorMessage = 'Network connection failed, please check your network settings and try again';
-        } else if (error.error === 'network_error') {
-          errorMessage = 'Network connection failed, please check your network settings and try again';
-        } else if (error.message && error.message.includes('Callback URL mismatch')) {
-          errorMessage = 'Authentication configuration error, please contact technical support';
-        }
-        
-        Alert.alert('Login Failed', errorMessage, [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Retry', onPress: () => handleLogin() }
-        ]);
+      let errorMessage = 'Login failed, please try again';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
       }
+      
+      Alert.alert('Login Failed', errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!email || !password) {
+      Alert.alert('Error', 'Please enter email and password');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log('Registering with:', {email});
+
+      const response = await register({email, password});
+
+      if (response.success) {
+        console.log('Registration successful:', response.data);
+        
+        Alert.alert(
+          'Success',
+          'Registration successful! Please login.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setIsRegisterMode(false);
+                setPassword(''); // 清空密码
+              },
+            },
+          ]
+        );
+      }
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      
+      let errorMessage = 'Registration failed, please try again';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert('Registration Failed', errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Client SSO App</Text>
-        <Text style={styles.subtitle}>Please login to continue</Text>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled">
+        <View style={styles.content}>
+          <Text style={styles.title}>Client SSO App</Text>
+          <Text style={styles.subtitle}>
+            {isRegisterMode ? 'Create your account' : 'Please login to continue'}
+          </Text>
 
-        <TouchableOpacity
-          style={styles.loginButton}
-          onPress={handleLogin}
-          disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.loginButtonText}>Login / Register</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
+          <View style={styles.form}>
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor="#999"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={!loading}
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              editable={!loading}
+            />
+
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={isRegisterMode ? handleRegister : handleLogin}
+              disabled={loading}>
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.actionButtonText}>
+                  {isRegisterMode ? 'Register' : 'Login'}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.switchButton}
+              onPress={() => {
+                setIsRegisterMode(!isRegisterMode);
+                setPassword(''); // 清空密码
+              }}
+              disabled={loading}>
+              <Text style={styles.switchButtonText}>
+                {isRegisterMode
+                  ? 'Already have an account? Login'
+                  : "Don't have an account? Register"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -111,6 +188,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#E8F4FD',
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
   content: {
     flex: 1,
@@ -128,15 +208,29 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#666',
-    marginBottom: 50,
+    marginBottom: 40,
     textAlign: 'center',
   },
-  loginButton: {
+  form: {
+    width: '100%',
+    maxWidth: 400,
+  },
+  input: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 16,
+    fontSize: 16,
+    color: '#333',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  actionButton: {
     backgroundColor: '#2E7BF6',
     paddingHorizontal: 40,
     paddingVertical: 16,
     borderRadius: 24,
-    minWidth: 200,
     alignItems: 'center',
     shadowColor: '#2E7BF6',
     shadowOffset: {
@@ -146,12 +240,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 6,
+    marginTop: 8,
   },
-  loginButtonText: {
+  actionButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '600',
   },
+  switchButton: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  switchButtonText: {
+    color: '#2E7BF6',
+    fontSize: 14,
+    fontWeight: '500',
+  },
 });
 
 export default LoginScreen;
+

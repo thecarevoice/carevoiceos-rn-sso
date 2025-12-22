@@ -29,6 +29,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>carevoiceosdemo</string>
+		<string>carevoiceos</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
